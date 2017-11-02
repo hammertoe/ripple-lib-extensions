@@ -184,6 +184,8 @@ class OrderBook extends EventEmitter {
     this._gotOffersFromLegOne = false
     this._gotOffersFromLegTwo = false
 
+    this._ledger_current_index = 0;
+      
     this._onReconnectBound = this._onReconnect.bind(this)
     this._onTransactionBound = this._onTransaction.bind(this)
 
@@ -441,7 +443,7 @@ class OrderBook extends EventEmitter {
   _subscribe(subscribe: boolean) {
     const request = {
       command: subscribe ? 'subscribe' : 'unsubscribe',
-      streams: ['transactions']
+      streams: ['transactions_proposed']
     }
     this._api.connection.request(request).then(() => {
       this._subscribed = subscribe
@@ -474,34 +476,31 @@ class OrderBook extends EventEmitter {
   }
 
   _onTransaction(transaction: Object): void {
-    if (this._subscribed && !this._waitingForOffers &&
-      this._transactionsLeft > 0
-    ) {
+    if (this._subscribed) {
       this._processTransaction(transaction)
 
-      if (--this._transactionsLeft === 0) {
-        const lastClosedLedger = this._closedLedgerVersion
-        if (this._isAutobridgeable && this._legOneBook !== null &&
-          this._legTwoBook !== null
-        ) {
-          if (!this._calculatorRunning) {
-            if (
-              this._legOneBook._lastUpdateLedgerSequence === lastClosedLedger ||
-              this._legTwoBook._lastUpdateLedgerSequence === lastClosedLedger
-            ) {
-              this._computeAutobridgedOffersWrapper()
-            } else if (this._lastUpdateLedgerSequence === lastClosedLedger) {
-              this._mergeDirectAndAutobridgedBooks()
-            }
+      const lastClosedLedger = this._closedLedgerVersion
+      if (this._isAutobridgeable && this._legOneBook !== null &&
+        this._legTwoBook !== null
+      ) {
+        if (!this._calculatorRunning) {
+          if (
+            this._legOneBook._lastUpdateLedgerSequence === lastClosedLedger ||
+            this._legTwoBook._lastUpdateLedgerSequence === lastClosedLedger
+          ) {
+            this._computeAutobridgedOffersWrapper()
+          } else if (this._lastUpdateLedgerSequence === lastClosedLedger) {
+            this._mergeDirectAndAutobridgedBooks()
           }
-        } else if (this._lastUpdateLedgerSequence === lastClosedLedger) {
-          this._emitAsync(['model', this._offers])
         }
       }
+      this._emitAsync(['model', this._offers])
     }
   }
 
-  _processTransaction(transaction: Object): void {
+    _processTransaction(transaction: Object): void {
+    this._ledger_current_index = transaction.ledger_current_index || this._ledger_current_index;
+	
     if (this._trace) {
       log.info('_processTransaction', this._key, transaction.transaction.hash)
     }
@@ -569,14 +568,18 @@ class OrderBook extends EventEmitter {
         this._validateAccount(node.fields.Account)
         this._modifyOffer(node)
 
-        state.takerGetsTotal = state.takerGetsTotal
-          .add(parseRippledAmount(node.fieldsPrev.TakerGets))
-          .subtract(parseRippledAmount(node.fieldsFinal.TakerGets))
+	if (node.fieldsPrev.TakerGets && node.fieldsFinal.TakerGets) {
+          state.takerGetsTotal = state.takerGetsTotal
+            .add(parseRippledAmount(node.fieldsPrev.TakerGets))
+            .subtract(parseRippledAmount(node.fieldsFinal.TakerGets))
+        }
 
-        state.takerPaysTotal = state.takerPaysTotal
-          .add(parseRippledAmount(node.fieldsPrev.TakerPays))
-          .subtract(parseRippledAmount(node.fieldsFinal.TakerPays))
-        break
+	if (node.fieldsPrev.TakerPays && node.fieldsFinal.TakerPays) { 
+          state.takerPaysTotal = state.takerPaysTotal
+            .add(parseRippledAmount(node.fieldsPrev.TakerPays))
+            .subtract(parseRippledAmount(node.fieldsFinal.TakerPays))
+            break
+	}
       }
       case 'CreatedNode': {
         this._validateAccount(node.fields.Account)
@@ -802,9 +805,13 @@ class OrderBook extends EventEmitter {
     const previousAmount = this._getOwnerOfferTotal(account)
     const newAmount = previousAmount.subtract(parseRippledAmount(amount))
 
+    if (newAmount.isNegative()) {
+      newAmount = this._currencyGets === 'XRP' ? new XRPValue(0) : new IOUValue(0)
+    }
+      
     this._ownerOffersTotal[account] = newAmount
-
     assert(!newAmount.isNegative(), 'Offer total cannot be negative')
+
     return newAmount
   }
 
