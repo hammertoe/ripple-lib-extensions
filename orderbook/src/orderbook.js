@@ -803,7 +803,7 @@ class OrderBook extends EventEmitter {
 
   _subtractOwnerOfferTotal(account: string, amount: RippledAmount): Value {
     const previousAmount = this._getOwnerOfferTotal(account)
-    const newAmount = previousAmount.subtract(parseRippledAmount(amount))
+    var newAmount = previousAmount.subtract(parseRippledAmount(amount))
 
     if (newAmount.isNegative()) {
       newAmount = this._currencyGets === 'XRP' ? new XRPValue(0) : new IOUValue(0)
